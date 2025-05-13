@@ -1,0 +1,10 @@
+{
+	"id": "zettelkasten-plugin",
+	"name": "Zettelkasten",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "增强 Obsidian 中的 Zettelkasten 笔记方法，提供更好的笔记管理和组织功能。",
+	"author": "一码",
+	"authorUrl": "https://github.com/yourusername",
+	"isDesktopOnly": false
+} 
