@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Menu, Notice } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Menu, Notice, WorkspaceLeaf } from 'obsidian';
 import { ZettelkastenSettings, DEFAULT_SETTINGS } from './settings';
 
 // 新增：主卡 ID 生成相关的工具函数
@@ -53,19 +53,41 @@ class MainCardIdGenerator {
 export default class ZettelkastenPlugin extends Plugin {
     settings: ZettelkastenSettings;
     private explorerObservers: MutationObserver[] = [];
+    private canvasObservers: MutationObserver[] = [];  // 新增：Canvas 观察者数组
 
     async onload() {
         await this.loadSettings();
         this.addSettingTab(new ZettelkastenSettingTab(this.app, this));
         this.attachObserversToAllExplorers();
-        // 监听 Obsidian 面板和布局变化，确保 observer 始终生效
-        this.registerEvent(this.app.workspace.on('layout-change', () => this.attachObserversToAllExplorers()));
-        this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.attachObserversToAllExplorers()));
-        // 监听元数据和文件变动，主动刷新
-        this.registerEvent(this.app.metadataCache.on('changed', () => this.updateExplorerTitles()));
-        this.registerEvent(this.app.vault.on('rename', () => this.updateExplorerTitles()));
-        this.registerEvent(this.app.vault.on('delete', () => this.updateExplorerTitles()));
-        this.registerEvent(this.app.vault.on('create', () => this.updateExplorerTitles()));
+        this.attachObserversToAllCanvases();  // 新增：初始化 Canvas 观察者
+
+        // 监听 Obsidian 面板和布局变化
+        this.registerEvent(this.app.workspace.on('layout-change', () => {
+            this.attachObserversToAllExplorers();
+            this.attachObserversToAllCanvases();  // 新增：布局变化时重新附加 Canvas 观察者
+        }));
+        this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+            this.attachObserversToAllExplorers();
+            this.attachObserversToAllCanvases();  // 新增：叶子变化时重新附加 Canvas 观察者
+        }));
+
+        // 监听元数据和文件变动
+        this.registerEvent(this.app.metadataCache.on('changed', () => {
+            this.updateExplorerTitles();
+            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+        }));
+        this.registerEvent(this.app.vault.on('rename', () => {
+            this.updateExplorerTitles();
+            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+        }));
+        this.registerEvent(this.app.vault.on('delete', () => {
+            this.updateExplorerTitles();
+            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+        }));
+        this.registerEvent(this.app.vault.on('create', () => {
+            this.updateExplorerTitles();
+            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+        }));
 
         // 新增：注册右键菜单
         this.registerEvent(
@@ -106,6 +128,7 @@ export default class ZettelkastenPlugin extends Plugin {
 
     onunload() {
         this.detachAllObservers();
+        this.detachAllCanvasObservers();  // 新增：清理 Canvas 观察者
     }
 
     private detachAllObservers() {
@@ -159,6 +182,94 @@ export default class ZettelkastenPlugin extends Plugin {
                 }
                 // 替换显示
                 titleEl.textContent = displayName;
+            });
+        });
+    }
+
+    // 新增：附加所有 Canvas 观察者
+    private attachObserversToAllCanvases() {
+        this.detachAllCanvasObservers();
+        const canvases = this.app.workspace.getLeavesOfType('canvas');
+        canvases.forEach(leaf => {
+            this.setupCanvasObserver(leaf);
+        });
+        // 初始刷新
+        this.updateCanvasTitles();
+    }
+
+    // 新增：设置单个 Canvas 观察者
+    private setupCanvasObserver(leaf: WorkspaceLeaf) {
+        const canvas = (leaf.view as any).canvas;
+        if (!canvas) return;
+
+        // 获取 Canvas 的容器元素
+        const containerEl = (leaf as any).containerEl?.querySelector('.canvas-wrapper');
+        if (!containerEl) {
+            console.error('[ZK] Canvas wrapper element not found');
+            return;
+        }
+
+        const updateTitles = () => this.updateCanvasTitles();
+        const observer = new MutationObserver(updateTitles);
+        observer.observe(containerEl, { 
+            childList: true, 
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['data-path']
+        });
+        this.canvasObservers.push(observer);
+    }
+
+    // 新增：清理所有 Canvas 观察者
+    private detachAllCanvasObservers() {
+        this.canvasObservers.forEach(observer => observer.disconnect());
+        this.canvasObservers = [];
+    }
+
+    // 新增：更新 Canvas 标题
+    public updateCanvasTitles() {
+        if (!this.settings.enableCanvasTitleDisplay) {
+            return;
+        }
+
+        const canvases = this.app.workspace.getLeavesOfType('canvas');
+        canvases.forEach((leaf, leafIdx) => {
+            // 直接遍历 DOM
+            const containerEl = (leaf as any).containerEl;
+            if (!containerEl) {
+                return;
+            }
+            const nodes = containerEl.querySelectorAll('.canvas-node');
+            nodes.forEach((nodeEl: Element, nodeIdx: number) => {
+                // 获取标题元素
+                const titleEl = nodeEl.querySelector('.inline-title');
+                if (!titleEl) return;
+                // 通过标题内容推断文件名
+                const fileName = titleEl.textContent?.trim();
+                if (!fileName) return;
+                // 只处理主盒路径下的文件
+                // 假设主盒下文件名唯一
+                const folder = this.app.vault.getAbstractFileByPath(this.settings.mainBoxPath);
+                if (!folder || !('children' in folder)) return;
+                const file = (folder as any).children.find((f: any) => f.basename === fileName);
+                if (!file) {
+                    return;
+                }
+                const cache = this.app.metadataCache.getFileCache(file);
+                const frontmatter = cache?.frontmatter;
+                if (!frontmatter) {
+                    return;
+                }
+                let displayName = '';
+                for (const prop of this.settings.displayProperties) {
+                    if (frontmatter[prop]) {
+                        displayName = frontmatter[prop];
+                        break;
+                    }
+                }
+                if (displayName) {
+                    titleEl.textContent = displayName;
+                }
             });
         });
     }
@@ -303,6 +414,18 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.enableMainCardIdGeneration = value;
                     await this.plugin.saveSettings();
+                }));
+
+        // 新增：Canvas 标题显示设置
+        new Setting(containerEl)
+            .setName('Canvas 标题显示')
+            .setDesc('在 Canvas 中使用笔记属性值替换标题（仅显示属性值，不显示文件名）')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.enableCanvasTitleDisplay)
+                .onChange(async (value) => {
+                    this.plugin.settings.enableCanvasTitleDisplay = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.updateCanvasTitles();
                 }));
     }
 } 
