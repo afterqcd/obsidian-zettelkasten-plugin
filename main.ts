@@ -248,52 +248,10 @@ export default class ZettelkastenPlugin extends Plugin {
         return files.sort((a, b) => a.basename.localeCompare(b.basename));
     }
 
-    // 修改：获取模板内容
-    private async getTemplateContent(id: string, path: string): Promise<string> {
-        if (!this.settings.enableTemplate || !this.settings.templatePath) {
-            return '';
-        }
-
-        try {
-            const templateFile = this.app.vault.getAbstractFileByPath(this.settings.templatePath);
-            if (!(templateFile instanceof TFile)) {
-                console.error('[ZK] 模板文件不存在:', this.settings.templatePath);
-                return '';
-            }
-
-            // 获取模板插件实例
-            const templatePlugin = (this.app as any).internalPlugins?.getPluginById('templates');
-            if (!templatePlugin || !templatePlugin.enabled) {
-                console.error('[ZK] 模板插件未启用');
-                return await this.app.vault.read(templateFile);
-            }
-
-            // 使用模板插件的变量替换功能
-            const templateContent = await this.app.vault.read(templateFile);
-            const newFile = {
-                basename: id,
-                path: path,
-            };
-            
-            // 使用模板插件的 parseTemplates 方法
-            return await templatePlugin.instance.parseTemplates(templateContent, newFile);
-        } catch (error) {
-            console.error('[ZK] 处理模板文件失败:', error);
-            return '';
-        }
-    }
-
     // 修改：创建新的主卡文件
     private async createNewMainCard(id: string, parent: TFolder) {
         const path = parent.path + '/' + id + '.md';
-        
-        // 获取并处理模板内容
-        let content = '';
-        if (this.settings.enableTemplate) {
-            content = await this.getTemplateContent(id, path);
-        }
-
-        await this.app.vault.create(path, content);
+        await this.app.vault.create(path, '');
         new Notice(`已创建新主卡：${id}`);
     }
 }
@@ -344,28 +302,6 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.enableMainCardIdGeneration)
                 .onChange(async (value) => {
                     this.plugin.settings.enableMainCardIdGeneration = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        // 新增：模板设置
-        new Setting(containerEl)
-            .setName('启用模板')
-            .setDesc('是否在创建新主卡时使用模板')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.enableTemplate)
-                .onChange(async (value) => {
-                    this.plugin.settings.enableTemplate = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(containerEl)
-            .setName('模板文件路径')
-            .setDesc('指定用于创建新主卡的模板文件路径（相对于库根目录）')
-            .addText(text => text
-                .setPlaceholder('输入模板文件路径')
-                .setValue(this.plugin.settings.templatePath)
-                .onChange(async (value) => {
-                    this.plugin.settings.templatePath = value;
                     await this.plugin.saveSettings();
                 }));
     }
