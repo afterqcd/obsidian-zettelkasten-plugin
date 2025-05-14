@@ -3,6 +3,7 @@ export interface ZettelkastenSettings {
     displayProperties: string[];
     enableMainCardIdGeneration: boolean;
     enableCanvasTitleDisplay: boolean;
+    canvasPath: string;
 }
 
 export const DEFAULT_SETTINGS: ZettelkastenSettings = {
@@ -10,4 +11,5 @@ export const DEFAULT_SETTINGS: ZettelkastenSettings = {
     displayProperties: ["alias"],
     enableMainCardIdGeneration: true,
     enableCanvasTitleDisplay: true,
+    canvasPath: "Canvas"
 } 

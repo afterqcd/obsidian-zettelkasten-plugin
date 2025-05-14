@@ -1,6 +1,34 @@
 import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder, Menu, Notice, WorkspaceLeaf } from 'obsidian';
 import { ZettelkastenSettings, DEFAULT_SETTINGS } from './settings';
 
+// Canvas 相关的类型定义
+interface CanvasData {
+    nodes: CanvasNode[];
+    edges: CanvasEdge[];
+    meta?: {
+        rootCardId?: string;
+    };
+}
+
+interface CanvasNode {
+    id: string;
+    type: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    [key: string]: any;
+}
+
+interface CanvasEdge {
+    id: string;
+    fromNode: string;
+    toNode: string;
+    fromSide: string;
+    toSide: string;
+    color?: string; // 添加可选的颜色属性
+}
+
 // 新增：主卡 ID 生成相关的工具函数
 class MainCardIdGenerator {
     // 解析主卡 ID 的各个部分
@@ -53,13 +81,267 @@ class MainCardIdGenerator {
 export default class ZettelkastenPlugin extends Plugin {
     settings: ZettelkastenSettings;
     private explorerObservers: MutationObserver[] = [];
-    private canvasObservers: MutationObserver[] = [];  // 新增：Canvas 观察者数组
+    private canvasObservers: MutationObserver[] = [];
+
+    // 新增：Canvas 相关的工具函数
+    private async getCanvasData(file: TFile): Promise<CanvasData> {
+        const content = await this.app.vault.read(file);
+        return JSON.parse(content);
+    }
+
+    private async saveCanvasData(file: TFile, data: CanvasData): Promise<void> {
+        await this.app.vault.modify(file, JSON.stringify(data, null, 2));
+    }
+
+    private async getCanvasRootCardId(file: TFile): Promise<string | undefined> {
+        const data = await this.getCanvasData(file);
+        return data.meta?.rootCardId;
+    }
+
+    private async setCanvasRootCardId(file: TFile, rootCardId: string): Promise<void> {
+        const data = await this.getCanvasData(file);
+        if (!data.meta) {
+            data.meta = {};
+        }
+        data.meta.rootCardId = rootCardId;
+        await this.saveCanvasData(file, data);
+    }
+
+    // 新增：获取主卡的显示名称
+    private async getCardDisplayName(file: TFile): Promise<string> {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const frontmatter = cache?.frontmatter;
+        if (frontmatter) {
+            for (const prop of this.settings.displayProperties) {
+                if (frontmatter[prop]) {
+                    return frontmatter[prop];
+                }
+            }
+        }
+        return file.basename;
+    }
+
+    // 新增：计算节点布局位置
+    private calculateNodePositions(relatedCards: TFile[], rootCardId: string): { nodes: CanvasNode[], edges: CanvasEdge[] } {
+        const nodeMap = new Map<string, CanvasNode>();
+        const nodes: CanvasNode[] = [];
+        const edges: CanvasEdge[] = [];
+
+        // 布局参数
+        const LEVEL_WIDTH = 600;   // 层级之间的水平间距
+        const NODE_HEIGHT = 240;   // 节点高度
+        const NODE_WIDTH = 300;    // 节点宽度
+        const MIN_VERTICAL_GAP = 10; // 节点之间的最小垂直间距
+
+        // 1. 递归收集所有节点及其层级
+        interface TreeNode {
+            id: string;
+            file: TFile;
+            children: TreeNode[];
+            level: number;
+        }
+        const levels: TreeNode[][] = [];
+        const nodeMapById = new Map<string, TreeNode>();
+        function buildTree(cardId: string, file: TFile, level: number): TreeNode {
+            const node: TreeNode = {
+                id: cardId,
+                file,
+                children: [],
+                level
+            };
+            nodeMapById.set(cardId, node);
+            if (!levels[level]) levels[level] = [];
+            levels[level].push(node);
+            // 查找所有直接子节点
+            const childCards = relatedCards.filter(card => {
+                const parts = card.basename.split('-');
+                return parts.length === level + rootCardId.split('-').length + 1 &&
+                       card.basename.startsWith(cardId + '-');
+            });
+            node.children = childCards
+                .map(card => buildTree(card.basename, card, level + 1))
+                .sort((a, b) => a.id.localeCompare(b.id));
+            return node;
+        }
+        const rootFile = relatedCards.find(card => card.basename === rootCardId);
+        if (!rootFile) return { nodes: [], edges: [] };
+        buildTree(rootCardId, rootFile, 0);
+
+        // 2. 计算每层Y区间
+        let y = 0;
+        const levelY: number[] = [];
+        for (let i = 0; i < levels.length; i++) {
+            levelY[i] = y;
+            y += levels[i].length * NODE_HEIGHT + (levels[i].length - 1) * MIN_VERTICAL_GAP;
+        }
+
+        // 3. 分配每个节点的Y
+        const nodeYMap = new Map<string, number>();
+        for (let i = 0; i < levels.length; i++) {
+            for (let j = 0; j < levels[i].length; j++) {
+                nodeYMap.set(levels[i][j].id, levelY[i] + j * (NODE_HEIGHT + MIN_VERTICAL_GAP));
+            }
+        }
+
+        // 4. 生成节点和边
+        nodeMapById.forEach((node, id) => {
+            const x = node.level * LEVEL_WIDTH;
+            const y = nodeYMap.get(id) ?? 0;
+            nodes.push({
+                id: node.id,
+                type: "file",
+                file: node.file.path,
+                x,
+                y,
+                width: NODE_WIDTH,
+                height: NODE_HEIGHT
+            });
+            // 添加边
+            node.children.forEach(child => {
+                edges.push({
+                    id: `edge-${node.id}-${child.id}`,
+                    fromNode: node.id,
+                    toNode: child.id,
+                    fromSide: "right",
+                    toSide: "left"
+                });
+            });
+        });
+        return { nodes, edges };
+    }
+
+    // 修改：创建知识树 Canvas
+    private async createKnowledgeTreeCanvas(rootFile: TFile): Promise<void> {
+        // 确保 Canvas 目录存在
+        const canvasFolder = this.app.vault.getAbstractFileByPath(this.settings.canvasPath);
+        if (!canvasFolder) {
+            await this.app.vault.createFolder(this.settings.canvasPath);
+        }
+
+        // 获取根主卡的显示名称
+        const displayName = await this.getCardDisplayName(rootFile);
+
+        // 创建 Canvas 文件
+        const canvasFileName = `${displayName}知识树.canvas`;
+        const canvasPath = `${this.settings.canvasPath}/${canvasFileName}`;
+        
+        // 检查文件是否已存在
+        const existingFile = this.app.vault.getAbstractFileByPath(canvasPath);
+        if (existingFile) {
+            throw new Error('知识树 Canvas 已存在');
+        }
+
+        const canvasFile = await this.app.vault.create(canvasPath, JSON.stringify({
+            nodes: [
+                {
+                    id: "root",
+                    type: "file",
+                    file: rootFile.path,
+                    x: 0,
+                    y: 0,
+                    width: 400,
+                    height: 400
+                }
+            ],
+            edges: [],
+            meta: {
+                rootCardId: rootFile.basename
+            }
+        }, null, 2));
+
+        // 打开新创建的 Canvas
+        const leaf = this.app.workspace.getLeaf('tab');
+        await leaf.openFile(canvasFile);
+
+        // 更新 Canvas 显示
+        await this.updateKnowledgeTreeCanvas(canvasFile);
+    }
+
+    // 修改：更新知识树 Canvas
+    private async updateKnowledgeTreeCanvas(canvasFile: TFile): Promise<void> {
+        const data = await this.getCanvasData(canvasFile);
+        const rootCardId = data.meta?.rootCardId;
+        if (!rootCardId) return;
+
+        // 获取所有相关主卡
+        const allCards = await this.getSortedMainCards();
+        const relatedCards = allCards.filter(card => 
+            card.basename === rootCardId || 
+            card.basename.startsWith(rootCardId + '-')
+        );
+
+        // 计算节点布局
+        const { nodes, edges } = this.calculateNodePositions(relatedCards, rootCardId);
+
+        // 更新 Canvas 数据
+        data.nodes = nodes;
+        data.edges = edges;
+        await this.saveCanvasData(canvasFile, data);
+    }
+
+    // 新增：检查并更新所有知识树 Canvas
+    private async updateAllKnowledgeTrees(newCard: TFile): Promise<void> {
+        const canvasFolder = this.app.vault.getAbstractFileByPath(this.settings.canvasPath);
+        if (!(canvasFolder instanceof TFolder)) return;
+
+        for (const file of canvasFolder.children) {
+            if (!(file instanceof TFile) || !file.extension.endsWith('canvas')) continue;
+
+            const rootCardId = await this.getCanvasRootCardId(file);
+            if (!rootCardId) continue;
+
+            if (newCard.basename === rootCardId || newCard.basename.startsWith(rootCardId + '-')) {
+                await this.updateKnowledgeTreeCanvas(file);
+            }
+        }
+    }
+
+    // 新增：从知识树中移除节点
+    private async removeNodeFromKnowledgeTree(canvasFile: TFile, nodeId: string): Promise<void> {
+        const data = await this.getCanvasData(canvasFile);
+        
+        // 移除节点
+        data.nodes = data.nodes.filter(node => node.id !== nodeId);
+        
+        // 移除相关的边
+        data.edges = data.edges.filter(edge => 
+            edge.fromNode !== nodeId && edge.toNode !== nodeId
+        );
+        
+        await this.saveCanvasData(canvasFile, data);
+    }
+
+    // 新增：检查并更新所有知识树 Canvas（删除节点）
+    private async updateAllKnowledgeTreesOnDelete(deletedFile: TFile): Promise<void> {
+        const canvasFolder = this.app.vault.getAbstractFileByPath(this.settings.canvasPath);
+        if (!(canvasFolder instanceof TFolder)) return;
+
+        for (const file of canvasFolder.children) {
+            if (!(file instanceof TFile) || !file.extension.endsWith('canvas')) continue;
+
+            const rootCardId = await this.getCanvasRootCardId(file);
+            if (!rootCardId) continue;
+
+            // 如果删除的是根节点，提示用户
+            if (deletedFile.basename === rootCardId) {
+                new Notice(`警告：已删除知识树"${file.basename}"的根节点`);
+                continue;
+            }
+
+            // 如果删除的是子节点，从知识树中移除
+            if (deletedFile.basename.startsWith(rootCardId + '-')) {
+                await this.removeNodeFromKnowledgeTree(file, deletedFile.basename);
+                // 重新布局剩余节点
+                await this.updateKnowledgeTreeCanvas(file);
+            }
+        }
+    }
 
     async onload() {
         await this.loadSettings();
         this.addSettingTab(new ZettelkastenSettingTab(this.app, this));
         this.attachObserversToAllExplorers();
-        this.attachObserversToAllCanvases();  // 新增：初始化 Canvas 观察者
+        this.attachObserversToAllCanvases();
 
         // 监听 Obsidian 面板和布局变化
         this.registerEvent(this.app.workspace.on('layout-change', () => {
@@ -88,6 +370,44 @@ export default class ZettelkastenPlugin extends Plugin {
             this.updateExplorerTitles();
             this.updateCanvasTitles();  // 新增：更新 Canvas 标题
         }));
+
+        // 新增：监听文件创建事件，自动更新知识树
+        this.registerEvent(
+            this.app.vault.on('create', async (file) => {
+                if (!(file instanceof TFile)) return;
+                if (!file.path.startsWith(this.settings.mainBoxPath)) return;
+                await this.updateAllKnowledgeTrees(file);
+            })
+        );
+
+        // 新增：监听文件删除事件
+        this.registerEvent(
+            this.app.vault.on('delete', async (file) => {
+                if (!(file instanceof TFile)) return;
+                if (!file.path.startsWith(this.settings.mainBoxPath)) return;
+                await this.updateAllKnowledgeTreesOnDelete(file);
+            })
+        );
+
+        // 新增：右键菜单项 - 在 Canvas 中展示知识树
+        this.registerEvent(
+            this.app.workspace.on('file-menu', (menu: Menu, file: TFile) => {
+                if (!file.path.startsWith(this.settings.mainBoxPath)) return;
+                
+                menu.addItem((item) => {
+                    item
+                        .setTitle('在 Canvas 中展示知识树')
+                        .setIcon('diagram-tree')
+                        .onClick(async () => {
+                            try {
+                                await this.createKnowledgeTreeCanvas(file);
+                            } catch (error) {
+                                new Notice('创建知识树 Canvas 失败：' + error.message);
+                            }
+                        });
+                });
+            })
+        );
 
         // 新增：注册右键菜单
         this.registerEvent(
@@ -405,7 +725,6 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                     this.plugin.updateExplorerTitles();
                 }));
 
-        // 新增：主卡 ID 生成功能设置
         new Setting(containerEl)
             .setName('启用主卡 ID 生成')
             .setDesc('是否启用主卡 ID 自动生成功能')
@@ -416,7 +735,6 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        // 新增：Canvas 标题显示设置
         new Setting(containerEl)
             .setName('Canvas 标题显示')
             .setDesc('在 Canvas 中使用笔记属性值替换标题（仅显示属性值，不显示文件名）')
@@ -426,6 +744,18 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                     this.plugin.settings.enableCanvasTitleDisplay = value;
                     await this.plugin.saveSettings();
                     this.plugin.updateCanvasTitles();
+                }));
+
+        // 新增：Canvas 存储路径设置
+        new Setting(containerEl)
+            .setName('Canvas 存储路径')
+            .setDesc('指定知识树 Canvas 文件的存储路径')
+            .addText(text => text
+                .setPlaceholder('Canvas')
+                .setValue(this.plugin.settings.canvasPath)
+                .onChange(async (value) => {
+                    this.plugin.settings.canvasPath = value;
+                    await this.plugin.saveSettings();
                 }));
     }
 } 
