@@ -123,35 +123,37 @@ export default class ZettelkastenPlugin extends Plugin {
 
     // 新增：计算节点布局位置
     private calculateNodePositions(relatedCards: TFile[], rootCardId: string): { nodes: CanvasNode[], edges: CanvasEdge[] } {
-        const nodeMap = new Map<string, CanvasNode>();
         const nodes: CanvasNode[] = [];
         const edges: CanvasEdge[] = [];
 
         // 布局参数
-        const LEVEL_WIDTH = 600;   // 层级之间的水平间距
-        const NODE_HEIGHT = 240;   // 节点高度
-        const NODE_WIDTH = 300;    // 节点宽度
-        const MIN_VERTICAL_GAP = 10; // 节点之间的最小垂直间距
+        const LEVEL_WIDTH = 600;
+        const NODE_HEIGHT = 240;
+        const NODE_WIDTH = 300;
+        const MIN_VERTICAL_GAP = 40;
 
-        // 1. 递归收集所有节点及其层级
+        // 1. 构建树结构
         interface TreeNode {
             id: string;
             file: TFile;
             children: TreeNode[];
+            parent: TreeNode | null;
             level: number;
+            x: number;
+            y: number;
         }
-        const levels: TreeNode[][] = [];
         const nodeMapById = new Map<string, TreeNode>();
-        function buildTree(cardId: string, file: TFile, level: number): TreeNode {
+        function buildTree(cardId: string, file: TFile, parent: TreeNode | null, level: number): TreeNode {
             const node: TreeNode = {
                 id: cardId,
                 file,
                 children: [],
-                level
+                parent,
+                level,
+                x: level * LEVEL_WIDTH,
+                y: 0
             };
             nodeMapById.set(cardId, node);
-            if (!levels[level]) levels[level] = [];
-            levels[level].push(node);
             // 查找所有直接子节点
             const childCards = relatedCards.filter(card => {
                 const parts = card.basename.split('-');
@@ -159,44 +161,43 @@ export default class ZettelkastenPlugin extends Plugin {
                        card.basename.startsWith(cardId + '-');
             });
             node.children = childCards
-                .map(card => buildTree(card.basename, card, level + 1))
+                .map(card => buildTree(card.basename, card, node, level + 1))
                 .sort((a, b) => a.id.localeCompare(b.id));
             return node;
         }
         const rootFile = relatedCards.find(card => card.basename === rootCardId);
         if (!rootFile) return { nodes: [], edges: [] };
-        buildTree(rootCardId, rootFile, 0);
+        const root = buildTree(rootCardId, rootFile, null, 0);
 
-        // 2. 计算每层Y区间
-        let y = 0;
-        const levelY: number[] = [];
-        for (let i = 0; i < levels.length; i++) {
-            levelY[i] = y;
-            y += levels[i].length * NODE_HEIGHT + (levels[i].length - 1) * MIN_VERTICAL_GAP;
-        }
-
-        // 3. 分配每个节点的Y
-        const nodeYMap = new Map<string, number>();
-        for (let i = 0; i < levels.length; i++) {
-            for (let j = 0; j < levels[i].length; j++) {
-                nodeYMap.set(levels[i][j].id, levelY[i] + j * (NODE_HEIGHT + MIN_VERTICAL_GAP));
+        // 2. 自底向上递归分配Y，父节点Y居中于所有子节点
+        let nextY = 0;
+        function layoutTree(node: TreeNode): void {
+            if (node.children.length === 0) {
+                node.y = nextY;
+                nextY += NODE_HEIGHT + MIN_VERTICAL_GAP;
+            } else {
+                for (const child of node.children) {
+                    layoutTree(child);
+                }
+                // 父节点Y居中于所有子节点
+                const minY = node.children[0].y;
+                const maxY = node.children[node.children.length - 1].y;
+                node.y = (minY + maxY) / 2;
             }
         }
+        layoutTree(root);
 
-        // 4. 生成节点和边
+        // 3. 生成节点和边
         nodeMapById.forEach((node, id) => {
-            const x = node.level * LEVEL_WIDTH;
-            const y = nodeYMap.get(id) ?? 0;
             nodes.push({
                 id: node.id,
                 type: "file",
                 file: node.file.path,
-                x,
-                y,
+                x: node.x,
+                y: node.y,
                 width: NODE_WIDTH,
                 height: NODE_HEIGHT
             });
-            // 添加边
             node.children.forEach(child => {
                 edges.push({
                     id: `edge-${node.id}-${child.id}`,
