@@ -127,10 +127,10 @@ export default class ZettelkastenPlugin extends Plugin {
         const edges: CanvasEdge[] = [];
 
         // 布局参数
-        const LEVEL_WIDTH = 600;
-        const NODE_HEIGHT = 240;
-        const NODE_WIDTH = 300;
-        const MIN_VERTICAL_GAP = 40;
+        const LEVEL_WIDTH = 720;
+        const NODE_HEIGHT = 300;
+        const NODE_WIDTH = 480;
+        const MIN_VERTICAL_GAP = 55;
 
         // 1. 构建树结构
         interface TreeNode {
@@ -169,23 +169,42 @@ export default class ZettelkastenPlugin extends Plugin {
         if (!rootFile) return { nodes: [], edges: [] };
         const root = buildTree(rootCardId, rootFile, null, 0);
 
-        // 2. 自底向上递归分配Y，父节点Y居中于所有子节点
-        let nextY = 0;
-        function layoutTree(node: TreeNode): void {
+        // 2. 紧凑树形布局算法：同层节点紧凑排列，分支可重叠，父节点居中
+        const nextYByLevel: number[] = [];
+        function layoutTree(node: TreeNode, level: number) {
+
+            if (nextYByLevel[level] === undefined) {
+                nextYByLevel[level] = 0;
+            }
+
             if (node.children.length === 0) {
-                node.y = nextY;
-                nextY += NODE_HEIGHT + MIN_VERTICAL_GAP;
+                node.y = nextYByLevel[level];
+                nextYByLevel[level] += NODE_HEIGHT + MIN_VERTICAL_GAP;
             } else {
                 for (const child of node.children) {
-                    layoutTree(child);
+                    layoutTree(child, level + 1);
                 }
-                // 父节点Y居中于所有子节点
-                const minY = node.children[0].y;
-                const maxY = node.children[node.children.length - 1].y;
+                const minY = Math.min(...node.children.map(c => c.y));
+                const maxY = Math.max(...node.children.map(c => c.y));
                 node.y = (minY + maxY) / 2;
+                if (node.y < nextYByLevel[level]) { // 如果需要下移节点，则下移所有子孙节点
+                    const yOffset = nextYByLevel[level] - node.y;
+                    function shiftChildren(children: TreeNode[], level: number, yOffset: number) {
+                        for (const child of children) {
+                            child.y += yOffset;
+                            if (child.children.length > 0) {
+                                shiftChildren(child.children, level + 1, yOffset);
+                            }
+                        }
+                        nextYByLevel[level] += yOffset;
+                    }
+                    shiftChildren(node.children, level+1, yOffset);
+                    node.y = nextYByLevel[level];
+                }
+                nextYByLevel[level] = Math.max(nextYByLevel[level], node.y + NODE_HEIGHT + MIN_VERTICAL_GAP);
             }
         }
-        layoutTree(root);
+        layoutTree(root, 0);
 
         // 3. 生成节点和边
         nodeMapById.forEach((node, id) => {
