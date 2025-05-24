@@ -49,4 +49,21 @@ export class MainCardIdHelper {
         const newChildId = Math.floor(childParts[childParts.length - 1] / 2);
         return parentId + '-' + newChildId;
     }
+
+    // 比较两个分段 ID
+    static compareIds(idA: string, idB: string): number {
+        const partsA = this.parseId(idA);
+        const partsB = this.parseId(idB);
+
+        const minLength = Math.min(partsA.length, partsB.length);
+
+        for (let i = 0; i < minLength; i++) {
+            if (partsA[i] !== partsB[i]) {
+                return partsA[i] - partsB[i];
+            }
+        }
+
+        // 如果其中一个 ID 是另一个的前缀，较短的 ID 排在前面
+        return partsA.length - partsB.length;
+    }
 } 

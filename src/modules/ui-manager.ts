@@ -1,5 +1,6 @@
 import { App, WorkspaceLeaf, TFile, TFolder } from 'obsidian';
 import { ZettelkastenPlugin } from '@/main';
+import { MainCardIdHelper } from '@/modules/id-helper';
 
 export class UIManager {
     private canvasObservers: MutationObserver[] = [];
@@ -68,12 +69,10 @@ export class UIManager {
                 // 然后对 vChildren._children 进行自定义排序
                 this.vChildren._children.sort((a: any, b: any) => {
                     if (a.file instanceof TFile && b.file instanceof TFile) {
-                        const cacheA = plugin.app.metadataCache.getFileCache(a.file);
-                        const cacheB = plugin.app.metadataCache.getFileCache(b.file);
-                        const aliasA = String(cacheA?.frontmatter?.[plugin.settings.mainCardIdProperty] ?? a.file.basename);
-                        const aliasB = String(cacheB?.frontmatter?.[plugin.settings.mainCardIdProperty] ?? b.file.basename);
-                        const cmp = aliasA.localeCompare(aliasB, 'zh-CN');
-                        return cmp; // 固定为升序
+                        const idA = plugin.fileManager.getCardId(a.file);
+                        const idB = plugin.fileManager.getCardId(b.file);
+                        // 使用新的 compareIds 方法进行数字分段比较
+                        return MainCardIdHelper.compareIds(idA, idB);
                     }
                     return 0;
                 });

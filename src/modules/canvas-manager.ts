@@ -1,6 +1,7 @@
 import { App, TFile, TFolder, Notice } from 'obsidian';
 import { CanvasData, CanvasNode, CanvasEdge } from '@/types';
 import { ZettelkastenPlugin } from '@/main';
+import { MainCardIdHelper } from '@/modules/id-helper';
 
 export class CanvasManager {
     constructor(private plugin: ZettelkastenPlugin) {}
@@ -202,7 +203,7 @@ export class CanvasManager {
             });
             node.children = childCards
                 .map(card => buildTree(self.plugin.fileManager.getCardId(card), card, node, level + 1))
-                .sort((a, b) => a.id.localeCompare(b.id));
+                .sort((a, b) => MainCardIdHelper.compareIds(a.id, b.id));
             return node;
         }
         const rootFile = relatedCards.find(card => self.plugin.fileManager.getCardId(card) === rootCardId);
