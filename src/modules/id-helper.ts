@@ -1,4 +1,4 @@
-export class MainCardIdGenerator {
+export class MainCardIdHelper {
     // 解析主卡 ID 的各个部分
     static parseId(id: string | number): number[] {
         // 如果是数字类型，直接返回包含该数字的数组
