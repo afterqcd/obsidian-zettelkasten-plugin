@@ -5,13 +5,15 @@ export interface ZettelkastenSettings {
     canvasPath: string;
     sortByProperty: string;
     sortOrder: 'asc' | 'desc';
+    idProperty: string;
 }
 
 export const DEFAULT_SETTINGS: ZettelkastenSettings = {
-    mainBoxPath: "",
-    displayProperties: ["alias"],
+    mainBoxPath: 'MainBox',
+    displayProperties: ['alias', 'tags'],
     enableMainCardIdGeneration: true,
-    canvasPath: "Canvas",
-    sortByProperty: "alias",
-    sortOrder: 'asc'
+    canvasPath: 'Canvas',
+    sortByProperty: 'alias',
+    sortOrder: 'asc',
+    idProperty: 'id'
 } 

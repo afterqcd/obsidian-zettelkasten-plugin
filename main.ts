@@ -32,7 +32,12 @@ interface CanvasEdge {
 // 新增：主卡 ID 生成相关的工具函数
 class MainCardIdGenerator {
     // 解析主卡 ID 的各个部分
-    static parseId(id: string): number[] {
+    static parseId(id: string | number): number[] {
+        // 如果是数字类型，直接返回包含该数字的数组
+        if (typeof id === 'number') {
+            return [id];
+        }
+        // 如果是字符串类型，按 '-' 分割并转换为数字
         return id.split('-').map(part => parseInt(part));
     }
 
@@ -376,17 +381,7 @@ export default class ZettelkastenPlugin extends Plugin {
             if (!childrenContainer) return;
 
             const fileElements = Array.from(childrenContainer.querySelectorAll('.nav-file'));
-            mainBoxFolder.children
-                .filter(file => file instanceof TFile)
-                .forEach((file, index) => {
-                    const fileEl = fileElements.find(el => 
-                        el.querySelector('.nav-file-title')?.getAttribute('data-path') === file.path
-                    );
-                    if (fileEl) {
-                        childrenContainer.appendChild(fileEl);
-                    }
-                });
-
+            // 只更新内容，不调整顺序
             fileElements.forEach((el: Element) => {
                 const titleDiv = el.querySelector('.nav-file-title');
                 if (!titleDiv) return;
@@ -465,10 +460,16 @@ export default class ZettelkastenPlugin extends Plugin {
             })
         );
 
+        this.registerEvent(
+            this.app.workspace.on('file-open', () => {
+                this.patchMainBoxFileItemSortWithRetry();
+            })
+        );
+
         // 修改：等待布局完全加载后再更新标题
         this.app.workspace.onLayoutReady(() => {
             this.updateExplorerTitles();
-            this.patchMainBoxFileItemSort();
+            this.patchMainBoxFileItemSortWithRetry();
         });
 
         // 新增：监听文件创建事件，自动更新知识树
@@ -546,12 +547,12 @@ export default class ZettelkastenPlugin extends Plugin {
         );
 
         this.app.workspace.onLayoutReady(() => {
-            this.patchMainBoxFileItemSort();
+            this.patchMainBoxFileItemSortWithRetry();
         });
-        this.registerEvent(this.app.vault.on('create', () => this.patchMainBoxFileItemSort()));
-        this.registerEvent(this.app.vault.on('delete', () => this.patchMainBoxFileItemSort()));
-        this.registerEvent(this.app.vault.on('rename', () => this.patchMainBoxFileItemSort()));
-        this.registerEvent(this.app.metadataCache.on('changed', () => this.patchMainBoxFileItemSort()));
+        this.registerEvent(this.app.vault.on('create', () => this.patchMainBoxFileItemSortWithRetry()));
+        this.registerEvent(this.app.vault.on('delete', () => this.patchMainBoxFileItemSortWithRetry()));
+        this.registerEvent(this.app.vault.on('rename', () => this.patchMainBoxFileItemSortWithRetry()));
+        this.registerEvent(this.app.metadataCache.on('changed', () => this.patchMainBoxFileItemSortWithRetry()));
     }
 
     onunload() {
@@ -594,35 +595,50 @@ export default class ZettelkastenPlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    // 新增：创建新的兄弟主卡
+    // 新增：获取主卡的 ID
+    private async getCardId(file: TFile): Promise<string> {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const frontmatter = cache?.frontmatter;
+        if (frontmatter && frontmatter[this.settings.idProperty]) {
+            return frontmatter[this.settings.idProperty];
+        }
+        return file.basename;
+    }
+
+    // 修改：创建新的兄弟主卡
     private async createNewSiblingCard(currentFile: TFile) {
         const files = await this.getSortedMainCards();
-        const currentId = currentFile.basename;
+        const currentId = await this.getCardId(currentFile);
         const currentParts = MainCardIdGenerator.parseId(currentId);
         const siblingLevel = currentParts.length;
         const parentPrefix = currentParts.slice(0, -1).join('-');
 
         // 过滤出同一父级下的兄弟主卡（分段数相同，前缀一致）
-        const siblingFiles = files.filter(f => {
-            const parts = MainCardIdGenerator.parseId(f.basename);
+        const siblingFiles = await Promise.all(files.map(async f => ({
+            file: f,
+            id: await this.getCardId(f)
+        })));
+
+        const filteredSiblings = siblingFiles.filter(({ id }) => {
+            const parts = MainCardIdGenerator.parseId(id);
             if (parts.length !== siblingLevel) return false;
             if (siblingLevel === 1) return true; // 顶层主卡没有父级
             return parts.slice(0, -1).join('-') === parentPrefix;
         }).sort((a, b) => {
             // 按最后一段编号的数值大小排序
-            const aParts = MainCardIdGenerator.parseId(a.basename);
-            const bParts = MainCardIdGenerator.parseId(b.basename);
+            const aParts = MainCardIdGenerator.parseId(a.id);
+            const bParts = MainCardIdGenerator.parseId(b.id);
             return aParts[aParts.length - 1] - bParts[bParts.length - 1];
         });
 
         // 找到当前主卡在兄弟主卡中的位置
-        const currentSiblingIndex = siblingFiles.findIndex(f => f.path === currentFile.path);
+        const currentSiblingIndex = filteredSiblings.findIndex(({ file }) => file.path === currentFile.path);
         if (currentSiblingIndex === -1) throw new Error('找不到当前主卡');
-        const nextSiblingFile = siblingFiles[currentSiblingIndex + 1];
+        const nextSiblingFile = filteredSiblings[currentSiblingIndex + 1];
 
         const newId = MainCardIdGenerator.generateSiblingId(
-            currentFile.basename,
-            nextSiblingFile ? nextSiblingFile.basename : null
+            currentId,
+            nextSiblingFile ? nextSiblingFile.id : null
         );
 
         const parent = currentFile.parent;
@@ -630,44 +646,43 @@ export default class ZettelkastenPlugin extends Plugin {
         await this.createNewMainCard(newId, parent);
     }
 
-    // 新增：创建新的子主卡
+    // 修改：创建新的子主卡
     private async createNewChildCard(parentFile: TFile) {
         const files = await this.getSortedMainCards();
+        const parentId = await this.getCardId(parentFile);
         const parentIndex = files.findIndex(f => f.path === parentFile.path);
         if (parentIndex === -1) throw new Error('找不到父主卡');
 
+        // 获取所有子主卡
+        const childFiles = await Promise.all(files.map(async f => ({
+            file: f,
+            id: await this.getCardId(f)
+        })));
+
         // 查找所有子主卡，按编号数值排序，取最小编号的那个
-        const childFiles = files.filter((f, index) =>
+        const filteredChildren = childFiles.filter(({ id }, index) =>
             index > parentIndex &&
-            f.basename.startsWith(parentFile.basename + '-')
+            id.startsWith(parentId + '-')
         );
+
         let firstChildFile = null;
-        if (childFiles.length > 0) {
-            childFiles.sort((a, b) => {
-                const aParts = MainCardIdGenerator.parseId(a.basename);
-                const bParts = MainCardIdGenerator.parseId(b.basename);
+        if (filteredChildren.length > 0) {
+            filteredChildren.sort((a, b) => {
+                const aParts = MainCardIdGenerator.parseId(a.id);
+                const bParts = MainCardIdGenerator.parseId(b.id);
                 return aParts[aParts.length - 1] - bParts[bParts.length - 1];
             });
-            firstChildFile = childFiles[0];
+            firstChildFile = filteredChildren[0];
         }
 
         const newId = MainCardIdGenerator.generateChildId(
-            parentFile.basename,
-            firstChildFile ? firstChildFile.basename : null
+            parentId,
+            firstChildFile ? firstChildFile.id : null
         );
 
         const parent = parentFile.parent;
         if (!parent) throw new Error('无法获取父文件夹');
         await this.createNewMainCard(newId, parent);
-    }
-
-    // 新增：获取排序后的主卡列表
-    private async getSortedMainCards(): Promise<TFile[]> {
-        const folder = this.app.vault.getAbstractFileByPath(this.settings.mainBoxPath);
-        if (!(folder instanceof TFolder)) throw new Error('主盒路径无效');
-
-        const files = folder.children.filter((f): f is TFile => f instanceof TFile);
-        return files.sort((a, b) => a.basename.localeCompare(b.basename));
     }
 
     // 修改：创建新的主卡文件
@@ -715,6 +730,33 @@ export default class ZettelkastenPlugin extends Plugin {
             item.sort._zettelkastenPatched = true;
         }
     }
+
+    // 延迟重试 patch，确保 fileItem 渲染后再 patch
+    patchMainBoxFileItemSortWithRetry(retry = 5, delay = 100) {
+        const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+        if (leaves.length === 0) return;
+        const view = (leaves[0] as any).view;
+        if (!view.fileItems) {
+            if (retry > 0) setTimeout(() => this.patchMainBoxFileItemSortWithRetry(retry - 1, delay), delay);
+            return;
+        }
+        const item = view.fileItems[this.settings.mainBoxPath];
+        if (!item) {
+            if (retry > 0) setTimeout(() => this.patchMainBoxFileItemSortWithRetry(retry - 1, delay), delay);
+            return;
+        }
+        // 调用原有 patch 逻辑
+        this.patchMainBoxFileItemSort();
+    }
+
+    // 新增：获取排序后的主卡列表
+    private async getSortedMainCards(): Promise<TFile[]> {
+        const folder = this.app.vault.getAbstractFileByPath(this.settings.mainBoxPath);
+        if (!(folder instanceof TFolder)) throw new Error('主盒路径无效');
+
+        const files = folder.children.filter((f): f is TFile => f instanceof TFile);
+        return files.sort((a, b) => a.basename.localeCompare(b.basename));
+    }
 }
 
 class ZettelkastenSettingTab extends PluginSettingTab {
@@ -753,6 +795,17 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                     this.plugin.settings.displayProperties = value.split(',').map(p => p.trim());
                     await this.plugin.saveSettings();
                     this.plugin.updateExplorerTitles();
+                }));
+
+        new Setting(containerEl)
+            .setName('ID 属性')
+            .setDesc('用于生成主卡 ID 的属性名')
+            .addText(text => text
+                .setPlaceholder('id')
+                .setValue(this.plugin.settings.idProperty)
+                .onChange(async (value) => {
+                    this.plugin.settings.idProperty = value;
+                    await this.plugin.saveSettings();
                 }));
 
         new Setting(containerEl)
