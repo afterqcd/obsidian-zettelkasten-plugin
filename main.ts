@@ -356,58 +356,37 @@ export default class ZettelkastenPlugin extends Plugin {
         }
     }
 
-    // 修改：获取文件的排序值
-    private getFileSortValue(file: TFile): string {
-        const cache = this.app.metadataCache.getFileCache(file);
-        const frontmatter = cache?.frontmatter;
-        if (frontmatter && frontmatter[this.settings.sortByProperty]) {
-            return frontmatter[this.settings.sortByProperty];
-        }
-        return file.basename;
-    }
-
-    // 修改：排序文件列表
-    private sortFiles(files: TFile[]): TFile[] {
-        return files.sort((a, b) => {
-            const valueA = this.getFileSortValue(a);
-            const valueB = this.getFileSortValue(b);
-            const comparison = valueA.localeCompare(valueB, 'zh-CN');
-            return this.settings.sortOrder === 'asc' ? comparison : -comparison;
-        });
-    }
-
-    // 新增：防抖刷新机制
-    private debounceUpdate: number | null = null;
-    public updateExplorerTitlesDebounced() {
-        if (this.debounceUpdate) clearTimeout(this.debounceUpdate);
-        this.debounceUpdate = window.setTimeout(() => {
-            this.updateExplorerTitles();
-        }, 300);
-    }
-
-    // 修改：更新文件管理器标题时应用排序
     public updateExplorerTitles() {
         const mainBoxFolder = this.app.vault.getAbstractFileByPath(this.settings.mainBoxPath);
         if (!(mainBoxFolder instanceof TFolder)) return;
-        const mainCards = mainBoxFolder.children
-            .filter(file => file instanceof TFile)
-            .map(file => file as TFile);
-        const sortedCards = this.sortFiles(mainCards);
+
+        // 获取所有文件资源管理器实例
         const explorers = document.querySelectorAll('.workspace-leaf-content[data-type="file-explorer"]');
+        if (explorers.length === 0) return;
+
         explorers.forEach(explorer => {
             const mainBoxEl = explorer.querySelector(`[data-path="${this.settings.mainBoxPath}"]`);
             if (!mainBoxEl) return;
+
+            // 获取主盒文件夹的展开状态
+            const isExpanded = mainBoxEl.classList.contains('is-collapsed') === false;
+            if (!isExpanded) return;
+
             const childrenContainer = mainBoxEl.nextElementSibling;
             if (!childrenContainer) return;
+
             const fileElements = Array.from(childrenContainer.querySelectorAll('.nav-file'));
-            sortedCards.forEach((file, index) => {
-                const fileEl = fileElements.find(el => 
-                    el.querySelector('.nav-file-title')?.getAttribute('data-path') === file.path
-                );
-                if (fileEl) {
-                    childrenContainer.appendChild(fileEl);
-                }
-            });
+            mainBoxFolder.children
+                .filter(file => file instanceof TFile)
+                .forEach((file, index) => {
+                    const fileEl = fileElements.find(el => 
+                        el.querySelector('.nav-file-title')?.getAttribute('data-path') === file.path
+                    );
+                    if (fileEl) {
+                        childrenContainer.appendChild(fileEl);
+                    }
+                });
+
             fileElements.forEach((el: Element) => {
                 const titleDiv = el.querySelector('.nav-file-title');
                 if (!titleDiv) return;
@@ -419,16 +398,33 @@ export default class ZettelkastenPlugin extends Plugin {
                 if (!(file instanceof TFile)) return;
                 const cache = this.app.metadataCache.getFileCache(file);
                 const frontmatter = cache?.frontmatter;
-                let displayName = file.basename;
+
+                // 创建新的标题容器
+                const titleContainer = document.createElement('div');
+                titleContainer.className = 'zk-title-container';
+
+                // 添加文件名
+                const fileNameEl = document.createElement('div');
+                fileNameEl.className = 'zk-file-name';
+                fileNameEl.textContent = file.basename;
+                titleContainer.appendChild(fileNameEl);
+
+                // 添加属性值
                 if (frontmatter) {
                     for (const prop of this.settings.displayProperties) {
                         if (frontmatter[prop]) {
-                            displayName += `:${frontmatter[prop]}`;
+                            const propEl = document.createElement('div');
+                            propEl.className = 'zk-property-value';
+                            propEl.textContent = frontmatter[prop];
+                            titleContainer.appendChild(propEl);
                             break;
                         }
                     }
                 }
-                titleEl.textContent = displayName;
+
+                // 清空原有内容并添加新容器
+                titleEl.innerHTML = '';
+                titleEl.appendChild(titleContainer);
             });
         });
     }
@@ -437,31 +433,43 @@ export default class ZettelkastenPlugin extends Plugin {
         await this.loadSettings();
         this.addSettingTab(new ZettelkastenSettingTab(this.app, this));
         this.attachObserversToAllCanvases();
-        this.updateCanvasTitles();
 
         // 监听 Obsidian 面板和布局变化
         this.registerEvent(this.app.workspace.on('layout-change', () => {
             this.attachObserversToAllCanvases();
-            this.updateCanvasTitles();
+            this.updateExplorerTitles();
         }));
         this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
             this.attachObserversToAllCanvases();
-            this.updateCanvasTitles();
+            this.updateExplorerTitles();
         }));
 
         // 监听元数据和文件变动
         this.registerEvent(this.app.metadataCache.on('changed', () => {
-            this.updateCanvasTitles();
+            this.updateExplorerTitles();
         }));
         this.registerEvent(this.app.vault.on('rename', () => {
-            this.updateCanvasTitles();
+            this.updateExplorerTitles();
         }));
         this.registerEvent(this.app.vault.on('delete', () => {
-            this.updateCanvasTitles();
+            this.updateExplorerTitles();
         }));
         this.registerEvent(this.app.vault.on('create', () => {
-            this.updateCanvasTitles();
+            this.updateExplorerTitles();
         }));
+
+        // 新增：监听文件资源管理器的展开/折叠事件
+        this.registerEvent(
+            this.app.workspace.on('file-explorer:folder-open' as any, () => {
+                this.updateExplorerTitles();
+            })
+        );
+
+        // 修改：等待布局完全加载后再更新标题
+        this.app.workspace.onLayoutReady(() => {
+            this.updateExplorerTitles();
+            this.patchMainBoxFileItemSort();
+        });
 
         // 新增：监听文件创建事件，自动更新知识树
         this.registerEvent(
@@ -537,13 +545,6 @@ export default class ZettelkastenPlugin extends Plugin {
             })
         );
 
-        // 新增：监听文件管理器排序事件
-        this.registerEvent(
-            this.app.workspace.on('file-explorer:sort' as any, async () => {
-                await this.updateExplorerTitles();
-            })
-        );
-
         this.app.workspace.onLayoutReady(() => {
             this.patchMainBoxFileItemSort();
         });
@@ -569,8 +570,6 @@ export default class ZettelkastenPlugin extends Plugin {
         canvases.forEach(leaf => {
             this.setupCanvasObserver(leaf);
         });
-        // 初始刷新
-        this.updateCanvasTitles();
     }
 
     // 新增：设置单个 Canvas 观察者
@@ -585,63 +584,6 @@ export default class ZettelkastenPlugin extends Plugin {
             return;
         }
 
-        const updateTitles = () => this.updateCanvasTitles();
-        const observer = new MutationObserver(updateTitles);
-        observer.observe(containerEl, { 
-            childList: true, 
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['data-path']
-        });
-        this.canvasObservers.push(observer);
-    }
-
-    // 新增：更新 Canvas 标题
-    public updateCanvasTitles() {
-        if (!this.settings.enableCanvasTitleDisplay) {
-            return;
-        }
-
-        const canvases = this.app.workspace.getLeavesOfType('canvas');
-        canvases.forEach((leaf, leafIdx) => {
-            // 直接遍历 DOM
-            const containerEl = (leaf as any).containerEl;
-            if (!containerEl) {
-                return;
-            }
-            const nodes = containerEl.querySelectorAll('.canvas-node');
-            nodes.forEach((nodeEl: Element, nodeIdx: number) => {
-                // 获取标题元素
-                const titleEl = nodeEl.querySelector('.inline-title');
-                if (!titleEl) return;
-                // 通过标题内容推断文件名
-                const fileName = titleEl.textContent?.trim();
-                if (!fileName) return;
-                // 只处理主盒路径下的文件
-                // 假设主盒下文件名唯一
-                const folder = this.app.vault.getAbstractFileByPath(this.settings.mainBoxPath);
-                if (!folder || !('children' in folder)) return;
-                const file = (folder as any).children.find((f: any) => f.basename === fileName);
-                if (!file) {
-                    return;
-                }
-                const cache = this.app.metadataCache.getFileCache(file);
-                const frontmatter = cache?.frontmatter;
-                if (!frontmatter) {
-                    return;
-                }
-                let displayName = '';
-                for (const prop of this.settings.displayProperties) {
-                    if (frontmatter[prop]) {
-                        displayName = frontmatter[prop];
-                        break;
-                    }
-                }
-                if (displayName) {
-                    titleEl.textContent = displayName;
-                }
-            });
-        });
     }
 
     async loadSettings() {
@@ -650,7 +592,6 @@ export default class ZettelkastenPlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
-        this.updateExplorerTitles();
     }
 
     // 新增：创建新的兄弟主卡
@@ -752,11 +693,9 @@ export default class ZettelkastenPlugin extends Plugin {
             item.vChildren &&
             Array.isArray(item.vChildren._children)
         ) {
-            console.log('[ZK] patch fileItem.sort');
             const plugin = this;
             const originalSort = item.sort;
             item.sort = function (...args: any[]) {
-                console.log('[ZK] patch fileItem.sort called');
                 // 先调用原始排序，保证结构完整
                 const result = originalSort.apply(this, args);
                 // 然后对 vChildren._children 进行自定义排序
@@ -764,8 +703,8 @@ export default class ZettelkastenPlugin extends Plugin {
                     if (a.file instanceof TFile && b.file instanceof TFile) {
                         const cacheA = plugin.app.metadataCache.getFileCache(a.file);
                         const cacheB = plugin.app.metadataCache.getFileCache(b.file);
-                        const aliasA = cacheA?.frontmatter?.[plugin.settings.sortByProperty] || a.file.basename;
-                        const aliasB = cacheB?.frontmatter?.[plugin.settings.sortByProperty] || b.file.basename;
+                        const aliasA = String(cacheA?.frontmatter?.[plugin.settings.sortByProperty] ?? a.file.basename);
+                        const aliasB = String(cacheB?.frontmatter?.[plugin.settings.sortByProperty] ?? b.file.basename);
                         const cmp = aliasA.localeCompare(aliasB, 'zh-CN');
                         return plugin.settings.sortOrder === 'asc' ? cmp : -cmp;
                     }
@@ -826,17 +765,6 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(containerEl)
-            .setName('Canvas 标题显示')
-            .setDesc('在 Canvas 中使用笔记属性值替换标题（仅显示属性值，不显示文件名）')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.enableCanvasTitleDisplay)
-                .onChange(async (value) => {
-                    this.plugin.settings.enableCanvasTitleDisplay = value;
-                    await this.plugin.saveSettings();
-                    this.plugin.updateCanvasTitles();
-                }));
-
         // 新增：Canvas 存储路径设置
         new Setting(containerEl)
             .setName('Canvas 存储路径')
@@ -859,7 +787,6 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.sortByProperty = value;
                     await this.plugin.saveSettings();
-                    await this.plugin.updateExplorerTitles();
                 }));
 
         // 新增：排序方向设置
@@ -873,7 +800,6 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                 .onChange(async (value: 'asc' | 'desc') => {
                     this.plugin.settings.sortOrder = value;
                     await this.plugin.saveSettings();
-                    await this.plugin.updateExplorerTitles();
                 }));
     }
 } 
