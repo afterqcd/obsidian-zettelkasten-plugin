@@ -80,7 +80,6 @@ class MainCardIdGenerator {
 
 export default class ZettelkastenPlugin extends Plugin {
     settings: ZettelkastenSettings;
-    private explorerObservers: MutationObserver[] = [];
     private canvasObservers: MutationObserver[] = [];
 
     // 新增：Canvas 相关的工具函数
@@ -357,38 +356,111 @@ export default class ZettelkastenPlugin extends Plugin {
         }
     }
 
+    // 修改：获取文件的排序值
+    private getFileSortValue(file: TFile): string {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const frontmatter = cache?.frontmatter;
+        if (frontmatter && frontmatter[this.settings.sortByProperty]) {
+            return frontmatter[this.settings.sortByProperty];
+        }
+        return file.basename;
+    }
+
+    // 修改：排序文件列表
+    private sortFiles(files: TFile[]): TFile[] {
+        return files.sort((a, b) => {
+            const valueA = this.getFileSortValue(a);
+            const valueB = this.getFileSortValue(b);
+            const comparison = valueA.localeCompare(valueB, 'zh-CN');
+            return this.settings.sortOrder === 'asc' ? comparison : -comparison;
+        });
+    }
+
+    // 新增：防抖刷新机制
+    private debounceUpdate: number | null = null;
+    public updateExplorerTitlesDebounced() {
+        if (this.debounceUpdate) clearTimeout(this.debounceUpdate);
+        this.debounceUpdate = window.setTimeout(() => {
+            this.updateExplorerTitles();
+        }, 300);
+    }
+
+    // 修改：更新文件管理器标题时应用排序
+    public updateExplorerTitles() {
+        const mainBoxFolder = this.app.vault.getAbstractFileByPath(this.settings.mainBoxPath);
+        if (!(mainBoxFolder instanceof TFolder)) return;
+        const mainCards = mainBoxFolder.children
+            .filter(file => file instanceof TFile)
+            .map(file => file as TFile);
+        const sortedCards = this.sortFiles(mainCards);
+        const explorers = document.querySelectorAll('.workspace-leaf-content[data-type="file-explorer"]');
+        explorers.forEach(explorer => {
+            const mainBoxEl = explorer.querySelector(`[data-path="${this.settings.mainBoxPath}"]`);
+            if (!mainBoxEl) return;
+            const childrenContainer = mainBoxEl.nextElementSibling;
+            if (!childrenContainer) return;
+            const fileElements = Array.from(childrenContainer.querySelectorAll('.nav-file'));
+            sortedCards.forEach((file, index) => {
+                const fileEl = fileElements.find(el => 
+                    el.querySelector('.nav-file-title')?.getAttribute('data-path') === file.path
+                );
+                if (fileEl) {
+                    childrenContainer.appendChild(fileEl);
+                }
+            });
+            fileElements.forEach((el: Element) => {
+                const titleDiv = el.querySelector('.nav-file-title');
+                if (!titleDiv) return;
+                const path = titleDiv.getAttribute('data-path');
+                const titleEl = el.querySelector('.nav-file-title-content');
+                if (!titleEl) return;
+                if (!path || !path.startsWith(this.settings.mainBoxPath)) return;
+                const file = this.app.vault.getAbstractFileByPath(path);
+                if (!(file instanceof TFile)) return;
+                const cache = this.app.metadataCache.getFileCache(file);
+                const frontmatter = cache?.frontmatter;
+                let displayName = file.basename;
+                if (frontmatter) {
+                    for (const prop of this.settings.displayProperties) {
+                        if (frontmatter[prop]) {
+                            displayName += `:${frontmatter[prop]}`;
+                            break;
+                        }
+                    }
+                }
+                titleEl.textContent = displayName;
+            });
+        });
+    }
+
     async onload() {
         await this.loadSettings();
         this.addSettingTab(new ZettelkastenSettingTab(this.app, this));
-        this.attachObserversToAllExplorers();
         this.attachObserversToAllCanvases();
+        this.updateCanvasTitles();
 
         // 监听 Obsidian 面板和布局变化
         this.registerEvent(this.app.workspace.on('layout-change', () => {
-            this.attachObserversToAllExplorers();
-            this.attachObserversToAllCanvases();  // 新增：布局变化时重新附加 Canvas 观察者
+            this.attachObserversToAllCanvases();
+            this.updateCanvasTitles();
         }));
         this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
-            this.attachObserversToAllExplorers();
-            this.attachObserversToAllCanvases();  // 新增：叶子变化时重新附加 Canvas 观察者
+            this.attachObserversToAllCanvases();
+            this.updateCanvasTitles();
         }));
 
         // 监听元数据和文件变动
         this.registerEvent(this.app.metadataCache.on('changed', () => {
-            this.updateExplorerTitles();
-            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+            this.updateCanvasTitles();
         }));
         this.registerEvent(this.app.vault.on('rename', () => {
-            this.updateExplorerTitles();
-            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+            this.updateCanvasTitles();
         }));
         this.registerEvent(this.app.vault.on('delete', () => {
-            this.updateExplorerTitles();
-            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+            this.updateCanvasTitles();
         }));
         this.registerEvent(this.app.vault.on('create', () => {
-            this.updateExplorerTitles();
-            this.updateCanvasTitles();  // 新增：更新 Canvas 标题
+            this.updateCanvasTitles();
         }));
 
         // 新增：监听文件创建事件，自动更新知识树
@@ -464,66 +536,30 @@ export default class ZettelkastenPlugin extends Plugin {
                 });
             })
         );
+
+        // 新增：监听文件管理器排序事件
+        this.registerEvent(
+            this.app.workspace.on('file-explorer:sort' as any, async () => {
+                await this.updateExplorerTitles();
+            })
+        );
+
+        this.app.workspace.onLayoutReady(() => {
+            this.patchMainBoxFileItemSort();
+        });
+        this.registerEvent(this.app.vault.on('create', () => this.patchMainBoxFileItemSort()));
+        this.registerEvent(this.app.vault.on('delete', () => this.patchMainBoxFileItemSort()));
+        this.registerEvent(this.app.vault.on('rename', () => this.patchMainBoxFileItemSort()));
+        this.registerEvent(this.app.metadataCache.on('changed', () => this.patchMainBoxFileItemSort()));
     }
 
     onunload() {
-        this.detachAllObservers();
         this.detachAllCanvasObservers();  // 新增：清理 Canvas 观察者
     }
 
-    private detachAllObservers() {
-        this.explorerObservers.forEach(observer => observer.disconnect());
-        this.explorerObservers = [];
-    }
-
-    private attachObserversToAllExplorers() {
-        this.detachAllObservers();
-        const explorers = document.querySelectorAll('.workspace-leaf-content[data-type="file-explorer"]');
-        explorers.forEach(explorer => {
-            this.setupExplorerObserver(explorer);
-        });
-        // 初始刷新
-        this.updateExplorerTitles();
-    }
-
-    private setupExplorerObserver(explorer: Element) {
-        const updateTitles = () => this.updateExplorerTitles();
-        // 监听 DOM 变化
-        const observer = new MutationObserver(updateTitles);
-        observer.observe(explorer, { childList: true, subtree: true });
-        this.explorerObservers.push(observer);
-    }
-
-    public updateExplorerTitles() {
-        const explorers = document.querySelectorAll('.workspace-leaf-content[data-type="file-explorer"]');
-        explorers.forEach(explorer => {
-            explorer.querySelectorAll('.nav-file').forEach((el: Element) => {
-                // 正确获取 data-path
-                const titleDiv = el.querySelector('.nav-file-title');
-                if (!titleDiv) return;
-                const path = titleDiv.getAttribute('data-path');
-                const titleEl = el.querySelector('.nav-file-title-content');
-                if (!titleEl) return;
-                if (!path || !path.startsWith(this.settings.mainBoxPath)) return;
-                // 获取文件对象
-                const file = this.app.vault.getAbstractFileByPath(path);
-                if (!(file instanceof TFile)) return;
-                // 获取 frontmatter
-                const cache = this.app.metadataCache.getFileCache(file);
-                const frontmatter = cache?.frontmatter;
-                let displayName = file.basename;
-                if (frontmatter) {
-                    for (const prop of this.settings.displayProperties) {
-                        if (frontmatter[prop]) {
-                            displayName += `:${frontmatter[prop]}`;
-                            break;
-                        }
-                    }
-                }
-                // 替换显示
-                titleEl.textContent = displayName;
-            });
-        });
+    private detachAllCanvasObservers() {
+        this.canvasObservers.forEach(observer => observer.disconnect());
+        this.canvasObservers = [];
     }
 
     // 新增：附加所有 Canvas 观察者
@@ -558,12 +594,6 @@ export default class ZettelkastenPlugin extends Plugin {
             attributeFilter: ['data-path']
         });
         this.canvasObservers.push(observer);
-    }
-
-    // 新增：清理所有 Canvas 观察者
-    private detachAllCanvasObservers() {
-        this.canvasObservers.forEach(observer => observer.disconnect());
-        this.canvasObservers = [];
     }
 
     // 新增：更新 Canvas 标题
@@ -705,6 +735,47 @@ export default class ZettelkastenPlugin extends Plugin {
         await this.app.vault.create(path, '');
         new Notice(`已创建新主卡：${id}`);
     }
+
+    // 只 patch 主盒文件夹的 fileItem.sort 方法，直接操作 vChildren._children
+    patchMainBoxFileItemSort() {
+        const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+        if (leaves.length === 0) return;
+        const view = (leaves[0] as any).view;
+        if (!view.fileItems) return;
+        const item = view.fileItems[this.settings.mainBoxPath];
+        if (
+            item &&
+            typeof item.sort === 'function' &&
+            !item.sort._zettelkastenPatched &&
+            item.file &&
+            item.file.path === this.settings.mainBoxPath &&
+            item.vChildren &&
+            Array.isArray(item.vChildren._children)
+        ) {
+            console.log('[ZK] patch fileItem.sort');
+            const plugin = this;
+            const originalSort = item.sort;
+            item.sort = function (...args: any[]) {
+                console.log('[ZK] patch fileItem.sort called');
+                // 先调用原始排序，保证结构完整
+                const result = originalSort.apply(this, args);
+                // 然后对 vChildren._children 进行自定义排序
+                this.vChildren._children.sort((a: any, b: any) => {
+                    if (a.file instanceof TFile && b.file instanceof TFile) {
+                        const cacheA = plugin.app.metadataCache.getFileCache(a.file);
+                        const cacheB = plugin.app.metadataCache.getFileCache(b.file);
+                        const aliasA = cacheA?.frontmatter?.[plugin.settings.sortByProperty] || a.file.basename;
+                        const aliasB = cacheB?.frontmatter?.[plugin.settings.sortByProperty] || b.file.basename;
+                        const cmp = aliasA.localeCompare(aliasB, 'zh-CN');
+                        return plugin.settings.sortOrder === 'asc' ? cmp : -cmp;
+                    }
+                    return 0;
+                });
+                return result;
+            };
+            item.sort._zettelkastenPatched = true;
+        }
+    }
 }
 
 class ZettelkastenSettingTab extends PluginSettingTab {
@@ -776,6 +847,33 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.canvasPath = value;
                     await this.plugin.saveSettings();
+                }));
+
+        // 新增：排序属性设置
+        new Setting(containerEl)
+            .setName('排序属性')
+            .setDesc('选择用于排序的 frontmatter 属性')
+            .addText(text => text
+                .setPlaceholder('alias')
+                .setValue(this.plugin.settings.sortByProperty)
+                .onChange(async (value) => {
+                    this.plugin.settings.sortByProperty = value;
+                    await this.plugin.saveSettings();
+                    await this.plugin.updateExplorerTitles();
+                }));
+
+        // 新增：排序方向设置
+        new Setting(containerEl)
+            .setName('排序方向')
+            .setDesc('选择排序方向')
+            .addDropdown(dropdown => dropdown
+                .addOption('asc', '升序')
+                .addOption('desc', '降序')
+                .setValue(this.plugin.settings.sortOrder)
+                .onChange(async (value: 'asc' | 'desc') => {
+                    this.plugin.settings.sortOrder = value;
+                    await this.plugin.saveSettings();
+                    await this.plugin.updateExplorerTitles();
                 }));
     }
 } 

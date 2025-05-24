@@ -4,6 +4,8 @@ export interface ZettelkastenSettings {
     enableMainCardIdGeneration: boolean;
     enableCanvasTitleDisplay: boolean;
     canvasPath: string;
+    sortByProperty: string;
+    sortOrder: 'asc' | 'desc';
 }
 
 export const DEFAULT_SETTINGS: ZettelkastenSettings = {
@@ -11,5 +13,7 @@ export const DEFAULT_SETTINGS: ZettelkastenSettings = {
     displayProperties: ["alias"],
     enableMainCardIdGeneration: true,
     enableCanvasTitleDisplay: true,
-    canvasPath: "Canvas"
+    canvasPath: "Canvas",
+    sortByProperty: "alias",
+    sortOrder: 'asc'
 } 
