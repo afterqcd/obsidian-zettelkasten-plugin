@@ -45,6 +45,10 @@ export class CanvasManager {
             throw new Error('知识树 Canvas 已存在');
         }
 
+        // 获取根主卡ID
+        const rootCardId = this.plugin.fileManager.getCardId(rootFile);
+
+        // 创建 Canvas 文件
         const canvasFile = await this.plugin.app.vault.create(canvasPath, JSON.stringify({
             nodes: [
                 {
@@ -59,7 +63,7 @@ export class CanvasManager {
             ],
             edges: [],
             meta: {
-                rootCardId: rootFile.basename
+                rootCardId: rootCardId
             }
         }, null, 2));
 
@@ -78,13 +82,13 @@ export class CanvasManager {
 
         // 获取所有相关主卡
         const allCards = await this.plugin.fileManager.getSortedMainCards();
-        const relatedCards = allCards.filter((card: TFile) => 
-            card.basename === rootCardId || 
-            card.basename.startsWith(rootCardId + '-')
-        );
+        const relatedCards = allCards.filter((card) => {
+            const cardId = this.plugin.fileManager.getCardId(card);
+            return cardId === rootCardId || cardId.startsWith(rootCardId + '-');
+        });
 
         // 计算节点布局
-        const { nodes, edges } = this.calculateNodePositions(relatedCards, rootCardId);
+        const { nodes, edges } = await this.calculateNodePositions(relatedCards, rootCardId);
 
         // 更新 Canvas 数据
         data.nodes = nodes;
@@ -147,7 +151,7 @@ export class CanvasManager {
         }
     }
 
-    private calculateNodePositions(relatedCards: TFile[], rootCardId: string): { nodes: CanvasNode[], edges: CanvasEdge[] } {
+    private async calculateNodePositions(relatedCards: TFile[], rootCardId: string): Promise<{ nodes: CanvasNode[], edges: CanvasEdge[] }> {
         const nodes: CanvasNode[] = [];
         const edges: CanvasEdge[] = [];
 
@@ -156,6 +160,9 @@ export class CanvasManager {
         const NODE_HEIGHT = 300;
         const NODE_WIDTH = 480;
         const MIN_VERTICAL_GAP = 55;
+
+        // 保存 this 的引用
+        const self = this;
 
         // 1. 构建树结构
         interface TreeNode {
@@ -168,7 +175,7 @@ export class CanvasManager {
             y: number;
         }
         const nodeMapById = new Map<string, TreeNode>();
-        function buildTree(cardId: string, file: TFile, parent: TreeNode | null, level: number): TreeNode {
+        async function buildTree(cardId: string, file: TFile, parent: TreeNode | null, level: number): Promise<TreeNode> {
             const node: TreeNode = {
                 id: cardId,
                 file,
@@ -181,22 +188,29 @@ export class CanvasManager {
             nodeMapById.set(cardId, node);
             // 查找所有直接子节点
             const childCards = relatedCards.filter(card => {
-                const parts = card.basename.split('-');
-                return parts.length === level + rootCardId.split('-').length + 1 &&
-                       card.basename.startsWith(cardId + '-');
+                const cardId = self.plugin.fileManager.getCardId(card);
+                const parentCardId = self.plugin.fileManager.getCardId(file); // 获取父节点的ID
+
+                // 确保 cardId 是 parentCardId 的直接子节点
+                // 子节点的 ID 应该以 parentCardId + '-' 开头，并且比 parentCardId 多一个分段
+                if (!cardId.startsWith(parentCardId + '-')) return false;
+                const parentParts = parentCardId.split('-');
+                const childParts = cardId.split('-');
+                return childParts.length === parentParts.length + 1;
             });
-            node.children = childCards
-                .map(card => buildTree(card.basename, card, node, level + 1))
-                .sort((a, b) => a.id.localeCompare(b.id));
+            node.children = await Promise.all(childCards
+                .map(async card => await buildTree(self.plugin.fileManager.getCardId(card), card, node, level + 1)))
+                .then(children => children.sort((a, b) => a.id.localeCompare(b.id)));
             return node;
         }
-        const rootFile = relatedCards.find(card => card.basename === rootCardId);
+        const rootFile = relatedCards.find(card => self.plugin.fileManager.getCardId(card) === rootCardId);
         if (!rootFile) return { nodes: [], edges: [] };
-        const root = buildTree(rootCardId, rootFile, null, 0);
+        // @ts-ignore
+        const root = await buildTree(rootCardId, rootFile, null, 0);
 
         // 2. 紧凑树形布局算法：同层节点紧凑排列，分支可重叠，父节点居中
         const nextYByLevel: number[] = [];
-        function layoutTree(node: TreeNode, level: number) {
+        async function layoutTree(node: TreeNode, level: number) {
             if (nextYByLevel[level] === undefined) {
                 nextYByLevel[level] = 0;
             }
@@ -206,29 +220,29 @@ export class CanvasManager {
                 nextYByLevel[level] += NODE_HEIGHT + MIN_VERTICAL_GAP;
             } else {
                 for (const child of node.children) {
-                    layoutTree(child, level + 1);
+                    await layoutTree(child, level + 1);
                 }
                 const minY = Math.min(...node.children.map(c => c.y));
                 const maxY = Math.max(...node.children.map(c => c.y));
                 node.y = (minY + maxY) / 2;
                 if (node.y < nextYByLevel[level]) { // 如果需要下移节点，则下移所有子孙节点
                     const yOffset = nextYByLevel[level] - node.y;
-                    function shiftChildren(children: TreeNode[], level: number, yOffset: number) {
+                    async function shiftChildren(children: TreeNode[], level: number, yOffset: number) {
                         for (const child of children) {
                             child.y += yOffset;
                             if (child.children.length > 0) {
-                                shiftChildren(child.children, level + 1, yOffset);
+                                await shiftChildren(child.children, level + 1, yOffset);
                             }
                         }
                         nextYByLevel[level] += yOffset;
                     }
-                    shiftChildren(node.children, level+1, yOffset);
+                    await shiftChildren(node.children, level+1, yOffset);
                     node.y = nextYByLevel[level];
                 }
                 nextYByLevel[level] = Math.max(nextYByLevel[level], node.y + NODE_HEIGHT + MIN_VERTICAL_GAP);
             }
         }
-        layoutTree(root, 0);
+        await layoutTree(root, 0);
 
         // 3. 生成节点和边
         nodeMapById.forEach((node, id) => {

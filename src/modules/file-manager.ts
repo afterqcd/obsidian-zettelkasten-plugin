@@ -5,7 +5,7 @@ import { MainCardIdGenerator } from './id-generator';
 export class FileManager {
     constructor(private plugin: ZettelkastenPlugin) {}
 
-    async getCardId(file: TFile): Promise<string> {
+    getCardId(file: TFile): string {
         const cache = this.plugin.app.metadataCache.getFileCache(file);
         const frontmatter = cache?.frontmatter;
         if (frontmatter && frontmatter[this.plugin.settings.mainCardIdProperty]) {
@@ -19,14 +19,7 @@ export class FileManager {
         if (!(folder instanceof TFolder)) throw new Error('主盒路径无效');
 
         const files = folder.children.filter((f): f is TFile => f instanceof TFile);
-        return files.sort((a, b) => {
-            const cacheA = this.plugin.app.metadataCache.getFileCache(a);
-            const cacheB = this.plugin.app.metadataCache.getFileCache(b);
-            const valueA = String(cacheA?.frontmatter?.[this.plugin.settings.mainCardIdProperty] ?? a.basename);
-            const valueB = String(cacheB?.frontmatter?.[this.plugin.settings.mainCardIdProperty] ?? b.basename);
-            const cmp = valueA.localeCompare(valueB, 'zh-CN');
-            return cmp; // 固定为升序
-        });
+        return files.sort((a, b) => this.getCardId(a).localeCompare(this.getCardId(b), 'zh-CN'));
     }
 
     async createNewMainCard(id: string, parent: TFolder): Promise<void> {
