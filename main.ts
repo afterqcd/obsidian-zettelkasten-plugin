@@ -115,12 +115,8 @@ export default class ZettelkastenPlugin extends Plugin {
     private async getCardDisplayName(file: TFile): Promise<string> {
         const cache = this.app.metadataCache.getFileCache(file);
         const frontmatter = cache?.frontmatter;
-        if (frontmatter) {
-            for (const prop of this.settings.displayProperties) {
-                if (frontmatter[prop]) {
-                    return frontmatter[prop];
-                }
-            }
+        if (frontmatter && frontmatter[this.settings.mainCardIdProperty]) {
+            return frontmatter[this.settings.mainCardIdProperty];
         }
         return file.basename;
     }
@@ -405,16 +401,11 @@ export default class ZettelkastenPlugin extends Plugin {
                 titleContainer.appendChild(fileNameEl);
 
                 // 添加属性值
-                if (frontmatter) {
-                    for (const prop of this.settings.displayProperties) {
-                        if (frontmatter[prop]) {
-                            const propEl = document.createElement('div');
-                            propEl.className = 'zk-property-value';
-                            propEl.textContent = frontmatter[prop];
-                            titleContainer.appendChild(propEl);
-                            break;
-                        }
-                    }
+                if (frontmatter && frontmatter[this.settings.mainCardIdProperty]) {
+                    const propEl = document.createElement('div');
+                    propEl.className = 'zk-property-value';
+                    propEl.textContent = frontmatter[this.settings.mainCardIdProperty];
+                    titleContainer.appendChild(propEl);
                 }
 
                 // 清空原有内容并添加新容器
@@ -513,7 +504,7 @@ export default class ZettelkastenPlugin extends Plugin {
         // 新增：注册右键菜单
         this.registerEvent(
             this.app.workspace.on('file-menu', (menu: Menu, file: TFile) => {
-                if (!this.settings.enableMainCardIdGeneration) return;
+                if (!this.settings.enableMainCardGenerationAssit) return;
                 if (!file.path.startsWith(this.settings.mainBoxPath)) return;
                 
                 // 添加新建兄弟主卡选项
@@ -599,8 +590,8 @@ export default class ZettelkastenPlugin extends Plugin {
     private async getCardId(file: TFile): Promise<string> {
         const cache = this.app.metadataCache.getFileCache(file);
         const frontmatter = cache?.frontmatter;
-        if (frontmatter && frontmatter[this.settings.idProperty]) {
-            return frontmatter[this.settings.idProperty];
+        if (frontmatter && frontmatter[this.settings.mainCardIdProperty]) {
+            return frontmatter[this.settings.mainCardIdProperty];
         }
         return file.basename;
     }
@@ -718,10 +709,10 @@ export default class ZettelkastenPlugin extends Plugin {
                     if (a.file instanceof TFile && b.file instanceof TFile) {
                         const cacheA = plugin.app.metadataCache.getFileCache(a.file);
                         const cacheB = plugin.app.metadataCache.getFileCache(b.file);
-                        const aliasA = String(cacheA?.frontmatter?.[plugin.settings.sortByProperty] ?? a.file.basename);
-                        const aliasB = String(cacheB?.frontmatter?.[plugin.settings.sortByProperty] ?? b.file.basename);
+                        const aliasA = String(cacheA?.frontmatter?.[plugin.settings.mainCardIdProperty] ?? a.file.basename);
+                        const aliasB = String(cacheB?.frontmatter?.[plugin.settings.mainCardIdProperty] ?? b.file.basename);
                         const cmp = aliasA.localeCompare(aliasB, 'zh-CN');
-                        return plugin.settings.sortOrder === 'asc' ? cmp : -cmp;
+                        return cmp; // 固定为升序
                     }
                     return 0;
                 });
@@ -755,7 +746,14 @@ export default class ZettelkastenPlugin extends Plugin {
         if (!(folder instanceof TFolder)) throw new Error('主盒路径无效');
 
         const files = folder.children.filter((f): f is TFile => f instanceof TFile);
-        return files.sort((a, b) => a.basename.localeCompare(b.basename));
+        return files.sort((a, b) => {
+            const cacheA = this.app.metadataCache.getFileCache(a);
+            const cacheB = this.app.metadataCache.getFileCache(b);
+            const valueA = String(cacheA?.frontmatter?.[this.settings.mainCardIdProperty] ?? a.basename);
+            const valueB = String(cacheB?.frontmatter?.[this.settings.mainCardIdProperty] ?? b.basename);
+            const cmp = valueA.localeCompare(valueB, 'zh-CN');
+            return cmp; // 固定为升序
+        });
     }
 }
 
@@ -786,39 +784,28 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('显示属性')
-            .setDesc('要显示的笔记属性，用逗号分隔')
+            .setName('主卡ID属性')
+            .setDesc('用于显示、ID生成和排序的笔记属性')
             .addText(text => text
-                .setPlaceholder('alias,tags')
-                .setValue(this.plugin.settings.displayProperties.join(','))
+                .setPlaceholder('alias')
+                .setValue(this.plugin.settings.mainCardIdProperty)
                 .onChange(async (value) => {
-                    this.plugin.settings.displayProperties = value.split(',').map(p => p.trim());
+                    this.plugin.settings.mainCardIdProperty = value;
                     await this.plugin.saveSettings();
                     this.plugin.updateExplorerTitles();
                 }));
 
         new Setting(containerEl)
-            .setName('ID 属性')
-            .setDesc('用于生成主卡 ID 的属性名')
-            .addText(text => text
-                .setPlaceholder('id')
-                .setValue(this.plugin.settings.idProperty)
-                .onChange(async (value) => {
-                    this.plugin.settings.idProperty = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(containerEl)
-            .setName('启用主卡 ID 生成')
-            .setDesc('是否启用主卡 ID 自动生成功能')
+            .setName('启用主卡辅助创建功能')
+            .setDesc('在创建主卡时自动生成 ID 并协助创建主卡文件')
             .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.enableMainCardIdGeneration)
+                .setValue(this.plugin.settings.enableMainCardGenerationAssit)
                 .onChange(async (value) => {
-                    this.plugin.settings.enableMainCardIdGeneration = value;
+                    this.plugin.settings.enableMainCardGenerationAssit = value;
                     await this.plugin.saveSettings();
                 }));
 
-        // 新增：Canvas 存储路径设置
+        // Canvas 存储路径设置
         new Setting(containerEl)
             .setName('Canvas 存储路径')
             .setDesc('指定知识树 Canvas 文件的存储路径')
@@ -827,31 +814,6 @@ class ZettelkastenSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.canvasPath)
                 .onChange(async (value) => {
                     this.plugin.settings.canvasPath = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        // 新增：排序属性设置
-        new Setting(containerEl)
-            .setName('排序属性')
-            .setDesc('选择用于排序的 frontmatter 属性')
-            .addText(text => text
-                .setPlaceholder('alias')
-                .setValue(this.plugin.settings.sortByProperty)
-                .onChange(async (value) => {
-                    this.plugin.settings.sortByProperty = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        // 新增：排序方向设置
-        new Setting(containerEl)
-            .setName('排序方向')
-            .setDesc('选择排序方向')
-            .addDropdown(dropdown => dropdown
-                .addOption('asc', '升序')
-                .addOption('desc', '降序')
-                .setValue(this.plugin.settings.sortOrder)
-                .onChange(async (value: 'asc' | 'desc') => {
-                    this.plugin.settings.sortOrder = value;
                     await this.plugin.saveSettings();
                 }));
     }
