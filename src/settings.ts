@@ -9,5 +9,5 @@ export const DEFAULT_SETTINGS: ZettelkastenSettings = {
     mainBoxPath: 'MainBox',
     mainCardIdProperty: 'alias',
     enableMainCardGenerationAssit: true,
-    canvasPath: 'Canvas',
-} 
+    canvasPath: 'Canvas'
+}; 
