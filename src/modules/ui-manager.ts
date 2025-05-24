@@ -26,40 +26,21 @@ export class UIManager {
             if (!childrenContainer) return;
 
             const fileElements = Array.from(childrenContainer.querySelectorAll('.nav-file'));
-            // 只更新内容，不调整顺序
+            
+            // 批量处理所有文件元素
             fileElements.forEach((el: Element) => {
                 const titleDiv = el.querySelector('.nav-file-title');
                 if (!titleDiv) return;
+                
                 const path = titleDiv.getAttribute('data-path');
                 const titleEl = el.querySelector('.nav-file-title-content');
-                if (!titleEl) return;
-                if (!path || !path.startsWith(this.plugin.settings.mainBoxPath)) return;
+                if (!titleEl || !path || !path.startsWith(this.plugin.settings.mainBoxPath)) return;
+                
                 const file = this.plugin.app.vault.getAbstractFileByPath(path);
                 if (!(file instanceof TFile)) return;
-                const cache = this.plugin.app.metadataCache.getFileCache(file);
-                const frontmatter = cache?.frontmatter;
 
-                // 创建新的标题容器
-                const titleContainer = document.createElement('div');
-                titleContainer.className = 'zk-title-container';
-
-                // 添加文件名
-                const fileNameEl = document.createElement('div');
-                fileNameEl.className = 'zk-file-name';
-                fileNameEl.textContent = file.basename;
-                titleContainer.appendChild(fileNameEl);
-
-                // 添加属性值
-                if (frontmatter && frontmatter[this.plugin.settings.mainCardIdProperty]) {
-                    const propEl = document.createElement('div');
-                    propEl.className = 'zk-property-value';
-                    propEl.textContent = frontmatter[this.plugin.settings.mainCardIdProperty];
-                    titleContainer.appendChild(propEl);
-                }
-
-                // 清空原有内容并添加新容器
-                titleEl.innerHTML = '';
-                titleEl.appendChild(titleContainer);
+                const cardId = this.plugin.fileManager.getCardId(file);
+                titleEl.textContent = `${cardId}:${file.basename}`;
             });
         });
     }
