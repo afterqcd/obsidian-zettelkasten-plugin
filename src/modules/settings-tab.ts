@@ -60,5 +60,18 @@ export class ZettelkastenSettingTab extends PluginSettingTab {
                     this.plugin.settings.canvasPath = value;
                     await this.plugin.saveSettings();
                 }));
+
+        new Setting(containerEl)
+            .setName('主盒显示模式')
+            .setDesc('选择主盒中主卡的显示方式')
+            .addDropdown(dropdown => dropdown
+                .addOption('id', '显示ID')
+                .addOption('tree', '显示树形')
+                .setValue(this.plugin.settings.explorerDisplayMode)
+                .onChange(async (value: 'id' | 'tree') => {
+                    this.plugin.settings.explorerDisplayMode = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.uiManager.updateExplorerTitles();
+                }));
     }
 } 

@@ -7,6 +7,11 @@ export class UIManager {
 
     constructor(private plugin: ZettelkastenPlugin) {}
 
+    private getTreePrefix(parts: number) {
+        if (parts === 1) return '';
+        return '  '.repeat(parts - 1) + '└ ';
+    }
+
     updateExplorerTitles() {
         const mainBoxFolder = this.plugin.app.vault.getAbstractFileByPath(this.plugin.settings.mainBoxPath);
         if (!(mainBoxFolder instanceof TFolder)) return;
@@ -41,7 +46,13 @@ export class UIManager {
                 if (!(file instanceof TFile)) return;
 
                 const cardId = this.plugin.fileManager.getCardId(file);
-                titleEl.textContent = `${cardId}:${file.basename}`;
+                if (!cardId) return;
+
+                let prefix = `${cardId}:`;
+                if (this.plugin.settings.explorerDisplayMode === 'tree') {
+                    prefix = this.getTreePrefix(cardId.split('-').length);
+                }
+                titleEl.textContent = `${prefix}${file.basename}`;
             });
         });
     }

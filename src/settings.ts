@@ -3,11 +3,13 @@ export interface ZettelkastenSettings {
     mainCardIdProperty: string;
     enableMainCardGenerationAssit: boolean;
     canvasPath: string;
+    explorerDisplayMode: 'id' | 'tree';
 }
 
 export const DEFAULT_SETTINGS: ZettelkastenSettings = {
     mainBoxPath: 'MainBox',
     mainCardIdProperty: 'alias',
     enableMainCardGenerationAssit: true,
-    canvasPath: 'Canvas'
+    canvasPath: 'Canvas',
+    explorerDisplayMode: 'id'
 }; 
