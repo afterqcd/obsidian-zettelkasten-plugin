@@ -22,16 +22,11 @@ export class ZettelkastenPlugin extends Plugin {
         // 添加设置面板
         this.addSettingTab(new ZettelkastenSettingTab(this.app, this));
 
-        // 附加 Canvas 观察者
-        this.uiManager.attachObserversToAllCanvases();
-
         // 监听 Obsidian 面板和布局变化
         this.registerEvent(this.app.workspace.on('layout-change', () => {
-            this.uiManager.attachObserversToAllCanvases();
             this.uiManager.updateExplorerTitles();
         }));
         this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
-            this.uiManager.attachObserversToAllCanvases();
             this.uiManager.updateExplorerTitles();
         }));
 
@@ -152,7 +147,7 @@ export class ZettelkastenPlugin extends Plugin {
     }
 
     onunload() {
-        this.uiManager.detachAllCanvasObservers();
+        // 清理工作
     }
 
     async loadSettings() {

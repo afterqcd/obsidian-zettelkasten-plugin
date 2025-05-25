@@ -29,7 +29,7 @@ export interface CanvasManager {
 }
 
 export interface FileManager {
-    getCardId(file: TFile): Promise<string>;
+    getCardId(file: TFile): string;
     getCardDisplayName(file: TFile): Promise<string>;
     getSortedMainCards(): Promise<TFile[]>;
     createNewMainCard(id: string, parent: TFolder): Promise<void>;

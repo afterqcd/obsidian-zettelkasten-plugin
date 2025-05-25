@@ -3,7 +3,6 @@ import { ZettelkastenPlugin } from '@/main';
 import { MainCardIdHelper } from '@/modules/id-helper';
 
 export class UIManager {
-    private canvasObservers: MutationObserver[] = [];
     private treePrefixCache: Map<number, string> = new Map();
 
     constructor(private plugin: ZettelkastenPlugin) {}
@@ -120,30 +119,5 @@ export class UIManager {
         }
         // 调用原有 patch 逻辑
         this.patchMainBoxFileItemSort();
-    }
-
-    setupCanvasObserver(leaf: WorkspaceLeaf) {
-        const canvas = (leaf.view as any).canvas;
-        if (!canvas) return;
-
-        // 获取 Canvas 的容器元素
-        const containerEl = (leaf as any).containerEl?.querySelector('.canvas-wrapper');
-        if (!containerEl) {
-            console.error('[ZK] Canvas wrapper element not found');
-            return;
-        }
-    }
-
-    attachObserversToAllCanvases() {
-        this.detachAllCanvasObservers();
-        const canvases = this.plugin.app.workspace.getLeavesOfType('canvas');
-        canvases.forEach((leaf: WorkspaceLeaf) => {
-            this.setupCanvasObserver(leaf);
-        });
-    }
-
-    detachAllCanvasObservers() {
-        this.canvasObservers.forEach(observer => observer.disconnect());
-        this.canvasObservers = [];
     }
 } 
