@@ -4,12 +4,24 @@ import { MainCardIdHelper } from '@/modules/id-helper';
 
 export class UIManager {
     private canvasObservers: MutationObserver[] = [];
+    private treePrefixCache: Map<number, string> = new Map();
 
     constructor(private plugin: ZettelkastenPlugin) {}
 
     private getTreePrefix(parts: number) {
-        if (parts === 1) return '';
-        return '  '.repeat(parts - 1) + '└ ';
+        // 检查缓存中是否存在结果
+        const cachedResult = this.treePrefixCache.get(parts);
+        if (cachedResult !== undefined) {
+            return cachedResult;
+        }
+
+        // 计算新结果
+        const result = parts === 1 ? '' : '  '.repeat(parts - 1) + '└ ';
+        
+        // 存储到缓存中
+        this.treePrefixCache.set(parts, result);
+        
+        return result;
     }
 
     updateExplorerTitles() {
